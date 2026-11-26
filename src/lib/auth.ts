@@ -4,15 +4,28 @@ import type { JWT } from 'next-auth/jwt'
 import GoogleProvider from 'next-auth/providers/google'
 import { prisma } from './prisma'
 
-const clientId = process.env.GOOGLE_CLIENT_ID
-const clientSecret = process.env.GOOGLE_CLIENT_SECRET
-const secret = process.env.NEXTAUTH_SECRET
+// Trim: a value pasted into the Vercel dashboard with a trailing newline/space is a
+// different client id / secret as far as Google and NextAuth are concerned.
+const readEnv = (...names: string[]) => {
+  for (const name of names) {
+    const value = process.env[name]?.trim().replace(/^["']+|["']+$/g, '').trim()
+    if (value) return value
+  }
+  return undefined
+}
+
+const clientId = readEnv('GOOGLE_CLIENT_ID')
+const clientSecret = readEnv('GOOGLE_CLIENT_SECRET')
+// NextAuth v4 only reads NEXTAUTH_SECRET itself; also accept the v5 name AUTH_SECRET.
+// A missing secret is what NextAuth reports as "Error: Configuration" in production.
+const secret = readEnv('NEXTAUTH_SECRET', 'AUTH_SECRET')
+if (secret) process.env.NEXTAUTH_SECRET = secret
 
 // Not enforced while `next build` collects page data (the root layout imports this module);
 // the check still runs whenever the server actually starts.
 if (!secret && process.env.NEXT_PHASE !== 'phase-production-build') {
   const instructions = process.env.NODE_ENV === 'production'
-    ? 'Set NEXTAUTH_SECRET in your Vercel project environment variables'
+    ? 'Set NEXTAUTH_SECRET (or AUTH_SECRET) in your Vercel project environment variables and redeploy'
     : 'Set NEXTAUTH_SECRET in .env.local'
   throw new Error(`NextAuth Configuration Error: NEXTAUTH_SECRET is not set. ${instructions}`)
 }
