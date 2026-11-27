@@ -25,19 +25,22 @@ const DAY_MS = 24 * 60 * 60 * 1000
 
 export const SETTINGS_KEYS_URL = '/dashboard/settings#api-keys'
 
+export const SERVICE_UNAVAILABLE = 'Auto Apply is not available right now. Please try later.'
+
 /**
- * One of the user's own API keys (saved in Settings) is missing or was rejected.
- * Routes answer with `code: 'missing_key'` so the page links to Settings instead of showing an error.
+ * A server API key (GOOGLE_PLACES_API_KEY / GEMINI_API_KEY) is missing or was rejected.
+ * The real reason is logged on the server only; users see SERVICE_UNAVAILABLE.
  */
 export class OutreachKeyError extends Error {
-  code = 'missing_key' as const
-  constructor(public key: 'places' | 'ai', message: string) {
-    super(message)
+  code = 'unavailable' as const
+  constructor(public key: 'places' | 'ai', public reason: string) {
+    super(SERVICE_UNAVAILABLE)
     this.name = 'OutreachKeyError'
+    console.error(`[outreach] server key problem (${key}): ${reason}`)
   }
 }
 
-export const keyErrorBody = (error: OutreachKeyError) => ({ error: error.message, code: error.code, key: error.key, settingsUrl: SETTINGS_KEYS_URL })
+export const keyErrorBody = (error: OutreachKeyError) => ({ error: error.message, code: error.code })
 
 const PROVIDER_LABEL: Record<AiProvider, string> = { anthropic: 'Anthropic', gemini: 'Gemini' }
 export const GEMINI_MODEL = 'gemini-2.5-flash'
@@ -82,9 +85,10 @@ async function searchPlaces(key: string, textQuery: string, pageToken?: string):
   if (!res.ok) {
     const message = data?.error?.message || `HTTP ${res.status}`
     if (/API key not valid|API_KEY_INVALID/i.test(JSON.stringify(data))) {
-      throw new OutreachKeyError('places', 'Your Google Places API key was rejected. Check it in Settings.')
+      throw new OutreachKeyError('places', `GOOGLE_PLACES_API_KEY was rejected by Google: ${message}`)
     }
-    throw new Error(`Google Places API error: ${message}${res.status === 403 ? ' (enable "Places API (New)" for this key in Google Cloud)' : ''}`)
+    if (res.status === 403) throw new OutreachKeyError('places', `Google Places API 403 (enable "Places API (New)" for GOOGLE_PLACES_API_KEY): ${message}`)
+    throw new Error(`Google Places API error: ${message}`)
   }
   const places = (data.places || []).map((p: { id?: string; displayName?: { text?: string }; websiteUri?: string }) => ({
     id: p.id || '',
@@ -248,7 +252,7 @@ async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promis
 /** Find new software houses in `city`, read their public email, and save them. Existing rows are never changed. */
 export async function discoverCompanies(userId: string, city: string, query = 'software house', max = 20) {
   const { placesKey } = await getUserKeys(userId)
-  if (!placesKey) throw new OutreachKeyError('places', 'Add your Google Places API key in Settings to search for companies.')
+  if (!placesKey) throw new OutreachKeyError('places', 'GOOGLE_PLACES_API_KEY is not set on the server.')
 
   const textQuery = `${query} in ${city}`
   const known =new Set((await prisma.outreachCompany.findMany({ where: { userId }, select: { domain: true } })).map((c) => c.domain))
@@ -357,7 +361,7 @@ async function writeWithAnthropic(apiKey: string, system: string, prompt: string
     })
   } catch (error) {
     if (error instanceof Anthropic.AuthenticationError || error instanceof Anthropic.PermissionDeniedError) {
-      throw new OutreachKeyError('ai', 'Your Anthropic API key was rejected. Update it in Settings.')
+      throw new OutreachKeyError('ai', `Anthropic API key was rejected: ${error.message}`)
     }
     if (error instanceof Anthropic.RateLimitError) throw new Error('The AI service is rate-limited right now. Try again in a minute.')
     if (error instanceof Anthropic.APIError) throw new Error(`AI request failed (${error.status}): ${error.message}`)
@@ -383,7 +387,7 @@ async function writeWithGemini(apiKey: string, system: string, prompt: string): 
   const data = await res.json().catch(() => ({}))
   if (!res.ok) {
     if (/API key not valid|API_KEY_INVALID|API_KEY_SERVICE_BLOCKED/i.test(JSON.stringify(data)) || res.status === 401 || res.status === 403) {
-      throw new OutreachKeyError('ai', 'Your Gemini API key was rejected. Update it in Settings.')
+      throw new OutreachKeyError('ai', `GEMINI_API_KEY was rejected (${res.status}): ${data?.error?.message || 'unknown error'}`)
     }
     if (res.status === 429) throw new Error('Gemini free-tier limit reached. Wait a minute (or until tomorrow for the daily limit) and try again.')
     throw new Error(`Gemini request failed (${res.status}): ${data?.error?.message || 'unknown error'}`)
@@ -401,7 +405,7 @@ export async function draftEmail(
   job?: { title: string; url: string } | null
 ) {
   const { aiProvider, aiKey } = await getUserKeys(user.id)
-  if (!aiKey) throw new OutreachKeyError('ai', `Add your ${PROVIDER_LABEL[aiProvider]} API key in Settings to write email drafts.`)
+  if (!aiKey) throw new OutreachKeyError('ai', `${aiProvider === 'gemini' ? 'GEMINI_API_KEY' : PROVIDER_LABEL[aiProvider] + ' key'} is not set on the server.`)
 
   const profile = [
     `Name: ${user.name || user.email}`,

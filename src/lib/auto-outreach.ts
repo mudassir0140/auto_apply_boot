@@ -1,9 +1,10 @@
 import type { OutreachCompany } from '@prisma/client'
 import { prisma } from './prisma'
 import { parseJsonList, type CurrentUser } from './session'
-import { getUserKeys } from './user-keys'
+import { getUserKeys, missingServerKeys } from './user-keys'
 import {
   OutreachKeyError,
+  SERVICE_UNAVAILABLE,
   acceptable,
   alreadyEmailed,
   discoverCompanies,
@@ -76,8 +77,10 @@ async function getState(userId: string) {
 export async function missingRequirement(user: CurrentUser): Promise<string | null> {
   if (!cityOf(user)) return 'Add your city under Preferences → Job locations (e.g. "Lahore"). Auto Apply searches for software houses there.'
   const keys = await getUserKeys(user.id)
-  if (!keys.placesKey) return 'Add your Google Places API key in Settings → API Keys.'
-  if (!keys.aiKey) return `Add your ${keys.aiProvider === 'gemini' ? 'Gemini' : 'Anthropic'} API key in Settings → API Keys.`
+  if (!keys.placesKey || !keys.aiKey) {
+    console.error(`[auto-apply] server env not configured, missing: ${missingServerKeys().join(', ')}`)
+    return SERVICE_UNAVAILABLE
+  }
   if (!(await getPdfResume(user.id))) return 'Upload your resume as a PDF on the Profile page. It is attached to every email.'
   return null
 }
@@ -373,7 +376,7 @@ export async function runTick(user: CurrentUser) {
     }
     const missing = await missingRequirement(user)
     if (missing) {
-      await stop(`Stopped: ${missing}`)
+      await stop(missing === SERVICE_UNAVAILABLE ? missing : `Stopped: ${missing}`)
       return await getStatus(user)
     }
     const resume = (await getPdfResume(user.id))!
@@ -416,7 +419,8 @@ export async function runTick(user: CurrentUser) {
     return await getStatus(user)
   } catch (error) {
     if (error instanceof OutreachKeyError || error instanceof AutoStop) {
-      await stop(error instanceof AutoStop && error.message === 'Auto Apply is off.' ? 'Auto Apply is off.' : `Stopped: ${error.message}`)
+      const plain = error.message === 'Auto Apply is off.' || error.message === SERVICE_UNAVAILABLE
+      await stop(plain ? error.message : `Stopped: ${error.message}`)
     } else {
       console.error('[auto-apply] tick error:', error)
       await setMessage(`Error: ${error instanceof Error ? error.message : 'unknown error'}. Retrying on the next round.`)

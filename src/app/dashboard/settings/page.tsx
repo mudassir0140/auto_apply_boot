@@ -6,7 +6,6 @@ import { useSession, signIn, signOut } from 'next-auth/react'
 import Link from 'next/link'
 import { useGmailConnection } from '@/hooks/useGmailConnection'
 import { useCachedFetch } from '@/hooks/useCachedFetch'
-import ApiKeysSection from './ApiKeysSection'
 
 interface UserSettings {
   email: string
@@ -223,8 +222,6 @@ export default function SettingsPage() {
           <Link href="/dashboard/preferences" className="text-blue-600 underline">Job Preferences</Link> page.
         </p>
       </div>
-
-      <ApiKeysSection />
     </div>
   )
 }
