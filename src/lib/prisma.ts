@@ -1,3 +1,4 @@
+import '@/lib/normalize-env' // cleans DATABASE_URL (quotes/whitespace) before it is read below
 import { PrismaClient } from '@prisma/client'
 
 const globalForPrisma = global as unknown as {

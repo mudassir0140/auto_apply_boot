@@ -26,6 +26,23 @@ alias('NEXTAUTH_SECRET', 'AUTH_SECRET')
 alias('GOOGLE_CLIENT_ID', 'AUTH_GOOGLE_ID')
 alias('GOOGLE_CLIENT_SECRET', 'AUTH_GOOGLE_SECRET')
 
+// A value pasted into the Vercel dashboard with surrounding quotes or a trailing
+// space/newline is stored exactly like that. For these it is never intended:
+// Google rejects the quoted client id/secret, Prisma cannot parse a quoted
+// DATABASE_URL (so the user is never saved at sign-in), and a whitespace-only
+// secret counts as "set" while being unusable. Strip it once, here.
+function clean(name: string): void {
+  const raw = process.env[name]
+  if (raw === undefined) return
+  const value = raw.trim().replace(/^["']+|["']+$/g, '').trim()
+  if (value) process.env[name] = value
+  else delete process.env[name]
+}
+clean('NEXTAUTH_SECRET')
+clean('GOOGLE_CLIENT_ID')
+clean('GOOGLE_CLIENT_SECRET')
+clean('DATABASE_URL')
+
 function normalise(name: string): void {
   const raw = process.env[name]
   if (raw === undefined) return
