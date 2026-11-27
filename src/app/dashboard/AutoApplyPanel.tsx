@@ -10,6 +10,8 @@ interface AutoRecord {
   email: string | null
   jobTitle: string | null
   jobUrl: string | null
+  applyUrl: string | null
+  source: string | null
   type: 'email' | 'job_applied' | 'apply_manually'
   status: 'sent' | 'failed' | 'pending'
   error: string | null
@@ -22,7 +24,6 @@ interface AutoStatus {
   running: boolean
   nextSendAt: string | null
   message: string | null
-  city: string | null
   sentToday: number
   limit: number
   records: AutoRecord[]
@@ -42,6 +43,8 @@ const TYPE_COLOR: Record<AutoRecord['type'], string> = {
   job_applied: 'bg-purple-100 text-purple-800',
   apply_manually: 'bg-orange-100 text-orange-800',
 }
+
+const SOURCE_LABEL: Record<string, string> = { remotive: 'Remotive', remoteok: 'RemoteOK', arbeitnow: 'Arbeitnow' }
 
 const STATUS_COLOR: Record<AutoRecord['status'], string> = {
   sent: 'bg-green-100 text-green-800',
@@ -120,7 +123,7 @@ export function AutoApplyPanel() {
         <div>
           <h2 className="text-lg font-bold text-gray-900">Auto Apply</h2>
           <p className="text-sm text-gray-600 mt-1">
-            Finds software houses{status?.city ? <> in <span className="font-medium">{status.city}</span></> : ''}, emails their careers/HR address from your Gmail with your resume, and applies to listed jobs that accept email.
+            Finds web / frontend / React / Next.js jobs on Remotive, RemoteOK and Arbeitnow. When a post gives an apply email, it sends your application from your Gmail with your resume attached; otherwise it lists the job for you to apply manually.
             Runs only while this page is open.
           </p>
         </div>
@@ -151,8 +154,6 @@ export function AutoApplyPanel() {
         {error ? (
           <p className="text-red-700">
             {error}{' '}
-            {/Settings/.test(error) && <Link href="/dashboard/settings#api-keys" className="underline">Open Settings</Link>}
-            {/Preferences/.test(error) && <Link href="/dashboard/preferences" className="underline">Open Preferences</Link>}
             {/Profile/.test(error) && <Link href="/dashboard/profile" className="underline">Open Profile</Link>}
           </p>
         ) : (
@@ -169,7 +170,7 @@ export function AutoApplyPanel() {
         <table className="w-full">
           <thead className="bg-gray-50 border-b border-gray-200">
             <tr>
-              {['Company', 'Email', 'Job title', 'Type', 'Status', 'Date'].map((h) => (
+              {['Company', 'Job title', 'Email or link', 'Type', 'Status', 'Date'].map((h) => (
                 <th key={h} className="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">{h}</th>
               ))}
             </tr>
@@ -185,16 +186,27 @@ export function AutoApplyPanel() {
                       r.company
                     )}
                   </td>
-                  <td className="px-6 py-3 text-sm text-gray-700">{r.email || '—'}</td>
                   <td className="px-6 py-3 text-sm text-gray-700">
                     {r.jobTitle ? (
                       r.jobUrl ? (
-                        <a href={r.jobUrl} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">
-                          {r.jobTitle}{r.type === 'apply_manually' ? ' ↗' : ''}
+                        <a href={r.jobUrl} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline" title="Original job post">
+                          {r.jobTitle}
                         </a>
                       ) : (
                         r.jobTitle
                       )
+                    ) : (
+                      '—'
+                    )}
+                    {r.source && <p className="text-xs text-gray-500 mt-0.5">via {SOURCE_LABEL[r.source] || r.source}</p>}
+                  </td>
+                  <td className="px-6 py-3 text-sm text-gray-700 max-w-xs break-all">
+                    {r.email ? (
+                      r.email
+                    ) : r.applyUrl || r.jobUrl ? (
+                      <a href={(r.applyUrl || r.jobUrl)!} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">
+                        Apply here ↗
+                      </a>
                     ) : (
                       '—'
                     )}

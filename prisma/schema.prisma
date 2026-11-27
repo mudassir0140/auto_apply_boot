@@ -88,7 +88,9 @@ model AutoOutreachLog {
   website        String?
   email          String?   // lower-cased recipient
   jobTitle       String?
-  jobUrl         String?
+  jobUrl         String?   // the original job post
+  applyUrl       String?   // where to apply by hand (type apply_manually)
+  source         String?   // job board: remotive | remoteok | arbeitnow
   type           String    // email | job_applied | apply_manually
   status         String    // sent | failed | pending
   error          String?
