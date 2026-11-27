@@ -28,7 +28,28 @@ interface OutreachData {
   gmailConnected: boolean
   placesConfigured: boolean
   aiConfigured: boolean
+  aiProvider: 'anthropic' | 'gemini'
+  settingsUrl: string
 }
+
+const SETTINGS_URL = '/dashboard/settings#api-keys'
+
+// An API error that may point the user to Settings (missing or rejected API key).
+class ApiError extends Error {
+  constructor(message: string, public settingsUrl?: string) {
+    super(message)
+  }
+}
+
+interface Problem {
+  text: string
+  settingsUrl?: string
+}
+
+const toProblem = (e: unknown, prefix = ''): Problem => ({
+  text: `${prefix}${e instanceof Error ? e.message : 'Something went wrong'}`,
+  settingsUrl: e instanceof ApiError ? e.settingsUrl : undefined,
+})
 
 const STATUS_STYLE: Record<string, string> = {
   pending: 'bg-yellow-100 text-yellow-900',
@@ -50,13 +71,13 @@ const TABS = [
 async function api(url: string, init?: RequestInit) {
   const res = await fetch(url, { ...init, headers: { 'Content-Type': 'application/json' } })
   const data = await res.json().catch(() => ({}))
-  if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`)
+  if (!res.ok) throw new ApiError(data.error || `Request failed (${res.status})`, data.code === 'missing_key' ? data.settingsUrl || SETTINGS_URL : undefined)
   return data
 }
 
 export default function OutreachPage() {
   const [data, setData] = useState<OutreachData | null>(null)
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useState<Problem | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
   const [city, setCity] = useState('')
@@ -70,7 +91,7 @@ export default function OutreachPage() {
       setData(d)
       setGithub((g) => g || d.githubUrl || '')
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to load')
+      setError(toProblem(e))
     }
   }, [])
 
@@ -86,7 +107,7 @@ export default function OutreachPage() {
       const message = await fn()
       if (message) setNotice(message)
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Something went wrong')
+      setError(toProblem(e))
     } finally {
       setBusy(null)
       load()
@@ -141,15 +162,33 @@ export default function OutreachPage() {
       </div>
 
       <div className="flex-1 overflow-auto p-8 space-y-6">
-        {error && <div className="bg-red-50 border border-red-200 p-4 rounded-lg text-red-800">{error}</div>}
+        {error &&
+          (error.settingsUrl ? (
+            <div className="bg-yellow-50 border border-yellow-200 p-4 rounded-lg text-yellow-900">
+              {error.text}{' '}
+              <Link href={error.settingsUrl} className="font-medium text-blue-600 underline">
+                Open Settings
+              </Link>
+            </div>
+          ) : (
+            <div className="bg-red-50 border border-red-200 p-4 rounded-lg text-red-800">{error.text}</div>
+          ))}
         {notice && <div className="bg-green-50 border border-green-200 p-4 rounded-lg text-green-800">{notice}</div>}
 
         {data && (
           <div className="bg-white rounded-lg border border-gray-200 shadow-sm p-6 space-y-3">
             <h2 className="font-semibold text-gray-900">Setup</h2>
             <ul className="text-sm space-y-1">
-              <Check ok={data.placesConfigured} text="Google Places API key (GOOGLE_PLACES_API_KEY)" />
-              <Check ok={data.aiConfigured} text="AI key for drafts (ANTHROPIC_API_KEY)" />
+              <Check
+                ok={data.placesConfigured}
+                text="Your Google Places API key (to find companies)"
+                link={data.placesConfigured ? undefined : { href: data.settingsUrl || SETTINGS_URL, label: 'Add in Settings' }}
+              />
+              <Check
+                ok={data.aiConfigured}
+                text={`Your ${data.aiProvider === 'gemini' ? 'Gemini' : 'Anthropic'} API key (to write drafts)`}
+                link={data.aiConfigured ? undefined : { href: data.settingsUrl || SETTINGS_URL, label: 'Add in Settings' }}
+              />
               <Check ok={data.gmailConnected} text="Gmail connected (sign in with Google)" />
               <Check
                 ok={!!data.resume}
@@ -244,7 +283,7 @@ function Check({ ok, text, link }: { ok: boolean; text: string; link?: { href: s
   )
 }
 
-function CompanyCard({ company, disabled, onChanged, onError }: { company: Company; disabled: boolean; onChanged: () => void; onError: (e: string | null) => void }) {
+function CompanyCard({ company, disabled, onChanged, onError }: { company: Company; disabled: boolean; onChanged: () => void; onError: (e: Problem | null) => void }) {
   const [email, setEmail] = useState(company.email || '')
   const [subject, setSubject] = useState(company.subject || '')
   const [body, setBody] = useState(company.body || '')
@@ -258,7 +297,7 @@ function CompanyCard({ company, disabled, onChanged, onError }: { company: Compa
       await api(`/api/outreach/companies/${company.id}`, { method: 'PATCH', body: JSON.stringify({ action, email, subject, body }) })
       onChanged()
     } catch (e) {
-      onError(`${company.name}: ${e instanceof Error ? e.message : 'failed'}`)
+      onError(toProblem(e, `${company.name}: `))
     } finally {
       setSaving(false)
     }
@@ -274,7 +313,7 @@ function CompanyCard({ company, disabled, onChanged, onError }: { company: Compa
       if (r.errors?.length) throw new Error(r.errors[0].error)
       onChanged()
     } catch (e) {
-      onError(`${company.name}: ${e instanceof Error ? e.message : 'failed'}`)
+      onError(toProblem(e, `${company.name}: `))
     } finally {
       setSaving(false)
     }

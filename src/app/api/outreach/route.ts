@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { getCurrentUser, unauthorized } from '@/lib/session'
 import { getGoogleAccount, isGmailConnected } from '@/lib/gmail'
-import { OUTREACH_DAILY_LIMIT, aiConfigured, getPdfResume, placesConfigured, sentInLastDay } from '@/lib/outreach'
+import { OUTREACH_DAILY_LIMIT, SETTINGS_KEYS_URL, getPdfResume, sentInLastDay } from '@/lib/outreach'
+import { getUserKeys } from '@/lib/user-keys'
 
 export const dynamic = 'force-dynamic'
 
@@ -11,7 +12,7 @@ export async function GET() {
   try {
     const user = await getCurrentUser()
     if (!user) return unauthorized()
-    const [companies, sentLast24h, resume, account] = await Promise.all([
+    const [companies, sentLast24h, resume, account, keys] = await Promise.all([
       prisma.outreachCompany.findMany({
         where: { userId: user.id },
         orderBy: { createdAt: 'desc' },
@@ -23,6 +24,7 @@ export async function GET() {
       sentInLastDay(user.id),
       getPdfResume(user.id),
       getGoogleAccount(user.id),
+      getUserKeys(user.id),
     ])
     return NextResponse.json({
       companies,
@@ -32,8 +34,11 @@ export async function GET() {
       githubUrl: user.githubUrl,
       portfolioUrl: user.portfolioUrl,
       gmailConnected: isGmailConnected(account),
-      placesConfigured: placesConfigured(),
-      aiConfigured: aiConfigured(),
+      // The user's own keys (Settings): only whether they are present, never the keys.
+      placesConfigured: !!keys.placesKey,
+      aiConfigured: !!keys.aiKey,
+      aiProvider: keys.aiProvider,
+      settingsUrl: SETTINGS_KEYS_URL,
     })
   } catch (error) {
     console.error('[outreach] list error:', error)

@@ -2,6 +2,7 @@ import Anthropic from '@anthropic-ai/sdk'
 import type { OutreachCompany } from '@prisma/client'
 import { prisma } from './prisma'
 import { parseJsonList, type CurrentUser } from './session'
+import { getUserKeys, type AiProvider } from './user-keys'
 import {
   sendApplicationEmail,
   GmailApiDisabledError,
@@ -22,24 +23,24 @@ import {
 export const OUTREACH_DAILY_LIMIT = 20
 const DAY_MS = 24 * 60 * 60 * 1000
 
-/** A required setting (API key) is missing: shown to the user as-is. */
-export class OutreachConfigError extends Error {
-  constructor(message: string) {
+export const SETTINGS_KEYS_URL = '/dashboard/settings#api-keys'
+
+/**
+ * One of the user's own API keys (saved in Settings) is missing or was rejected.
+ * Routes answer with `code: 'missing_key'` so the page links to Settings instead of showing an error.
+ */
+export class OutreachKeyError extends Error {
+  code = 'missing_key' as const
+  constructor(public key: 'places' | 'ai', message: string) {
     super(message)
-    this.name = 'OutreachConfigError'
+    this.name = 'OutreachKeyError'
   }
 }
 
-const readEnv = (...names: string[]) => {
-  for (const name of names) {
-    const value = process.env[name]?.trim().replace(/^["']+|["']+$/g, '').trim()
-    if (value) return value
-  }
-  return undefined
-}
+export const keyErrorBody = (error: OutreachKeyError) => ({ error: error.message, code: error.code, key: error.key, settingsUrl: SETTINGS_KEYS_URL })
 
-export const placesConfigured = () => !!readEnv('GOOGLE_PLACES_API_KEY', 'GOOGLE_MAPS_API_KEY')
-export const aiConfigured = () => !!readEnv('ANTHROPIC_API_KEY')
+const PROVIDER_LABEL: Record<AiProvider, string> = { anthropic: 'Anthropic', gemini: 'Gemini' }
+export const GEMINI_MODEL = 'gemini-2.5-flash'
 
 // ---------------------------------------------------------------------------
 // 1. Google Places
@@ -65,10 +66,7 @@ export function domainOf(url: string | null | undefined): string | null {
   }
 }
 
-async function searchPlaces(textQuery: string, pageToken?: string): Promise<{ places: Omit<Place, 'domain'>[]; next?: string }> {
-  const key = readEnv('GOOGLE_PLACES_API_KEY', 'GOOGLE_MAPS_API_KEY')
-  if (!key) throw new OutreachConfigError('GOOGLE_PLACES_API_KEY is not set. Add it in Vercel → Settings → Environment Variables and redeploy.')
-
+async function searchPlaces(key: string, textQuery: string, pageToken?: string): Promise<{ places: Omit<Place, 'domain'>[]; next?: string }> {
   const res = await fetch('https://places.googleapis.com/v1/places:searchText', {
     method: 'POST',
     headers: {
@@ -83,6 +81,9 @@ async function searchPlaces(textQuery: string, pageToken?: string): Promise<{ pl
   const data = await res.json().catch(() => ({}))
   if (!res.ok) {
     const message = data?.error?.message || `HTTP ${res.status}`
+    if (/API key not valid|API_KEY_INVALID/i.test(JSON.stringify(data))) {
+      throw new OutreachKeyError('places', 'Your Google Places API key was rejected. Check it in Settings.')
+    }
     throw new Error(`Google Places API error: ${message}${res.status === 403 ? ' (enable "Places API (New)" for this key in Google Cloud)' : ''}`)
   }
   const places = (data.places || []).map((p: { id?: string; displayName?: { text?: string }; websiteUri?: string }) => ({
@@ -246,15 +247,18 @@ async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promis
 
 /** Find new software houses in `city`, read their public email, and save them. Existing rows are never changed. */
 export async function discoverCompanies(userId: string, city: string, query = 'software house', max = 20) {
+  const { placesKey } = await getUserKeys(userId)
+  if (!placesKey) throw new OutreachKeyError('places', 'Add your Google Places API key in Settings to search for companies.')
+
   const textQuery = `${query} in ${city}`
-  const known = new Set((await prisma.outreachCompany.findMany({ where: { userId }, select: { domain: true } })).map((c) => c.domain))
+  const known =new Set((await prisma.outreachCompany.findMany({ where: { userId }, select: { domain: true } })).map((c) => c.domain))
 
   const fresh: Place[] = []
   let token: string | undefined
   let pages = 0
   let listed = 0
   do {
-    const { places, next } = await searchPlaces(textQuery, token)
+    const { places, next } = await searchPlaces(placesKey, textQuery, token)
     pages++
     listed += places.length
     for (const p of places) {
@@ -305,7 +309,8 @@ export async function discoverCompanies(userId: string, city: string, query = 's
 // 3. AI draft
 // ---------------------------------------------------------------------------
 
-const MODEL = () => readEnv('ANTHROPIC_MODEL') || 'claude-opus-5-5'
+// Optional deployment-wide override of the Claude model (not a secret).
+const ANTHROPIC_MODEL = () => process.env.ANTHROPIC_MODEL?.trim() || 'claude-opus-5-5'
 
 function describe(item: unknown): string {
   if (typeof item === 'string') return item
@@ -334,8 +339,65 @@ function ensureLinks(body: string, links: Array<[string, string | null | undefin
   return `${body.slice(0, signOff).trimEnd()}\n\n${missing.join('\n')}\n${body.slice(signOff)}`
 }
 
+async function writeWithAnthropic(apiKey: string, system: string, prompt: string): Promise<string> {
+  const model = ANTHROPIC_MODEL()
+  const client = new Anthropic({ apiKey })
+  let response: Anthropic.Beta.BetaMessage
+  try {
+    response = await client.beta.messages.create({
+      model,
+      max_tokens: 4000,
+      output_config: { effort: 'low' },
+      // Retry on another model if this one declines (supported on Opus/Sonnet/Fable 5.x).
+      ...(/^claude-(opus-5(-5)?|sonnet-5-5|fable-5-[12])$/.test(model)
+        ? { betas: ['server-side-fallback-2026-07-01'], fallbacks: 'default' as const }
+        : {}),
+      system,
+      messages: [{ role: 'user', content: prompt }],
+    })
+  } catch (error) {
+    if (error instanceof Anthropic.AuthenticationError || error instanceof Anthropic.PermissionDeniedError) {
+      throw new OutreachKeyError('ai', 'Your Anthropic API key was rejected. Update it in Settings.')
+    }
+    if (error instanceof Anthropic.RateLimitError) throw new Error('The AI service is rate-limited right now. Try again in a minute.')
+    if (error instanceof Anthropic.APIError) throw new Error(`AI request failed (${error.status}): ${error.message}`)
+    throw error
+  }
+  if (response.stop_reason === 'refusal') throw new Error('The AI declined to write this email. Write it by hand or try again.')
+  return response.content.map((b) => (b.type === 'text' ? b.text : '')).join('')
+}
+
+async function writeWithGemini(apiKey: string, system: string, prompt: string): Promise<string> {
+  const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
+    body: JSON.stringify({
+      systemInstruction: { parts: [{ text: system }] },
+      contents: [{ role: 'user', parts: [{ text: prompt }] }],
+      // No thinking budget: a short email does not need it, and it keeps free-tier usage low.
+      generationConfig: { responseMimeType: 'application/json', maxOutputTokens: 2048, thinkingConfig: { thinkingBudget: 0 } },
+    }),
+    signal: AbortSignal.timeout(60_000),
+    cache: 'no-store',
+  })
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) {
+    if (/API key not valid|API_KEY_INVALID|API_KEY_SERVICE_BLOCKED/i.test(JSON.stringify(data)) || res.status === 401 || res.status === 403) {
+      throw new OutreachKeyError('ai', 'Your Gemini API key was rejected. Update it in Settings.')
+    }
+    if (res.status === 429) throw new Error('Gemini free-tier limit reached. Wait a minute (or until tomorrow for the daily limit) and try again.')
+    throw new Error(`Gemini request failed (${res.status}): ${data?.error?.message || 'unknown error'}`)
+  }
+  const candidate = data.candidates?.[0]
+  if (!candidate || candidate.finishReason === 'SAFETY' || candidate.finishReason === 'PROHIBITED_CONTENT') {
+    throw new Error('The AI declined to write this email. Write it by hand or try again.')
+  }
+  return (candidate.content?.parts || []).map((p: { text?: string }) => p.text || '').join('')
+}
+
 export async function draftEmail(user: CurrentUser, company: Pick<OutreachCompany, 'name' | 'website' | 'city' | 'siteText'>) {
-  if (!aiConfigured()) throw new OutreachConfigError('ANTHROPIC_API_KEY is not set. Add it in Vercel → Settings → Environment Variables and redeploy.')
+  const { aiProvider, aiKey } = await getUserKeys(user.id)
+  if (!aiKey) throw new OutreachKeyError('ai', `Add your ${PROVIDER_LABEL[aiProvider]} API key in Settings to write email drafts.`)
 
   const profile = [
     `Name: ${user.name || user.email}`,
@@ -352,30 +414,10 @@ export async function draftEmail(user: CurrentUser, company: Pick<OutreachCompan
 
   const companyBlock = `Company: ${company.name}\nWebsite: ${company.website}${company.city ? `\nCity: ${company.city}` : ''}\n<website_text>\n${company.siteText || '(not available)'}\n</website_text>`
 
-  const model = MODEL()
-  const client = new Anthropic({ apiKey: readEnv('ANTHROPIC_API_KEY') })
-  let response: Anthropic.Beta.BetaMessage
-  try {
-    response = await client.beta.messages.create({
-      model,
-      max_tokens: 4000,
-      output_config: { effort: 'low' },
-      // Retry on another model if this one declines (supported on Opus/Sonnet/Fable 5.x).
-      ...(/^claude-(opus-5(-5)?|sonnet-5-5|fable-5-[12])$/.test(model)
-        ? { betas: ['server-side-fallback-2026-07-01'], fallbacks: 'default' as const }
-        : {}),
-      system: SYSTEM_PROMPT,
-      messages: [{ role: 'user', content: `Developer profile:\n${profile}\n\n${companyBlock}\n\nWrite the email.` }],
-    })
-  } catch (error) {
-    if (error instanceof Anthropic.AuthenticationError) throw new OutreachConfigError('ANTHROPIC_API_KEY is invalid.')
-    if (error instanceof Anthropic.RateLimitError) throw new Error('The AI service is rate-limited right now. Try again in a minute.')
-    if (error instanceof Anthropic.APIError) throw new Error(`AI request failed (${error.status}): ${error.message}`)
-    throw error
-  }
-
-  if (response.stop_reason === 'refusal') throw new Error('The AI declined to write this email. Write it by hand or try again.')
-  const text = response.content.map((b) => (b.type === 'text' ? b.text : '')).join('')
+  const prompt = `Developer profile:\n${profile}\n\n${companyBlock}\n\nWrite the email.`
+  const text = aiProvider === 'gemini'
+    ? await writeWithGemini(aiKey, SYSTEM_PROMPT, prompt)
+    : await writeWithAnthropic(aiKey, SYSTEM_PROMPT, prompt)
   let parsed: { subject?: unknown; body?: unknown } = {}
   try {
     parsed = JSON.parse(text.match(/\{[\s\S]*\}/)?.[0] || '{}')

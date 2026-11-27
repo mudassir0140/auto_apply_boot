@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getCurrentUser, unauthorized } from '@/lib/session'
-import { OutreachConfigError, discoverCompanies } from '@/lib/outreach'
+import { OutreachKeyError, discoverCompanies, keyErrorBody } from '@/lib/outreach'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 300
@@ -17,8 +17,8 @@ export async function POST(req: NextRequest) {
   try {
     return NextResponse.json({ success: true, ...(await discoverCompanies(user.id, city, query)) })
   } catch (error) {
+    if (error instanceof OutreachKeyError) return NextResponse.json(keyErrorBody(error), { status: 400 })
     console.error('[outreach] discover error:', error)
-    const message = error instanceof Error ? error.message : 'Search failed'
-    return NextResponse.json({ error: message }, { status: error instanceof OutreachConfigError ? 503 : 502 })
+    return NextResponse.json({ error: error instanceof Error ? error.message : 'Search failed' }, { status: 502 })
   }
 }

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { getCurrentUser, isObjectId, unauthorized } from '@/lib/session'
-import { OutreachConfigError, draftEmail } from '@/lib/outreach'
+import { OutreachKeyError, draftEmail, keyErrorBody } from '@/lib/outreach'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 300
@@ -35,15 +35,16 @@ export async function POST(req: NextRequest) {
             await prisma.outreachCompany.update({ where: { id: c.id }, data: { ...draft, draftedAt: new Date(), error: null } })
             drafted++
           } catch (error) {
-            if (error instanceof OutreachConfigError) throw error
+            if (error instanceof OutreachKeyError) throw error
             errors.push({ id: c.id, name: c.name, error: error instanceof Error ? error.message : 'Draft failed' })
           }
         })
       )
     }
   } catch (error) {
-    // Missing/invalid API key: every draft would fail the same way.
-    return NextResponse.json({ error: error instanceof Error ? error.message : 'Draft failed', drafted }, { status: 503 })
+    // Missing/rejected API key: every draft would fail the same way, so point to Settings.
+    if (error instanceof OutreachKeyError) return NextResponse.json({ ...keyErrorBody(error), drafted }, { status: 400 })
+    throw error
   }
 
   const remaining = await prisma.outreachCompany.count({ where: { userId: user.id, status: 'pending', email: { not: null }, body: null } })
