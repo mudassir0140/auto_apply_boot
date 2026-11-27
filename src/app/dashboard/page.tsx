@@ -6,6 +6,7 @@ import Link from 'next/link'
 import { useGmailConnection } from '@/hooks/useGmailConnection'
 import { GmailIssueBanner, type GmailIssue } from './GmailIssueBanner'
 import { useCachedFetch } from '@/hooks/useCachedFetch'
+import { AutoApplyPanel } from './AutoApplyPanel'
 
 interface DashboardStats {
   totalJobs: number
@@ -177,6 +178,8 @@ export default function Dashboard() {
               <Link href="/dashboard/profile" className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">Set up profile</Link>
             </div>
           )}
+
+          <AutoApplyPanel />
 
           {/* 24-Hour Activity Stats */}
           <div className="mb-8">

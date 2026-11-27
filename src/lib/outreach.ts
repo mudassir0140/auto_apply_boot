@@ -116,7 +116,7 @@ function isPublicHttpUrl(raw: string): boolean {
   }
 }
 
-async function fetchHtml(url: string): Promise<{ url: string; html: string } | null> {
+export async function fetchHtml(url: string): Promise<{ url: string; html: string } | null> {
   if (!isPublicHttpUrl(url)) return null
   try {
     const res = await fetch(url, {
@@ -147,9 +147,9 @@ interface Candidate {
   page: string
 }
 
-const sameSite = (a: string, b: string) => a === b || a.endsWith('.' + b) || b.endsWith('.' + a)
+export const sameSite = (a: string, b: string) => a === b || a.endsWith('.' + b) || b.endsWith('.' + a)
 
-function emailsIn(html: string, page: string): Candidate[] {
+export function emailsIn(html: string, page: string): Candidate[] {
   const found: Candidate[] = []
   for (const m of Array.from(html.matchAll(/mailto:([^"'?>\s]+)/gi))) {
     let value = m[1]
@@ -163,7 +163,7 @@ function emailsIn(html: string, page: string): Candidate[] {
   return found
 }
 
-function acceptable(c: Candidate, siteDomain: string): boolean {
+export function acceptable(c: Candidate, siteDomain: string): boolean {
   const [local, domain] = c.email.split('@')
   if (!local || !domain || FILE_EXT.test(c.email) || BAD_LOCAL.test(local) || JUNK_DOMAIN.test(domain)) return false
   if (sameSite(domain, siteDomain)) return true
@@ -172,7 +172,7 @@ function acceptable(c: Candidate, siteDomain: string): boolean {
   return FREE_MAIL.has(domain) && c.fromMailto
 }
 
-function rank(c: Candidate): number {
+export function rank(c: Candidate): number {
   const local = c.email.split('@')[0]
   let r = 2
   if (/career|jobs?|^hr|recruit|talent|hiring|join|people/.test(local)) r = 0
@@ -395,7 +395,11 @@ async function writeWithGemini(apiKey: string, system: string, prompt: string): 
   return (candidate.content?.parts || []).map((p: { text?: string }) => p.text || '').join('')
 }
 
-export async function draftEmail(user: CurrentUser, company: Pick<OutreachCompany, 'name' | 'website' | 'city' | 'siteText'>) {
+export async function draftEmail(
+  user: CurrentUser,
+  company: Pick<OutreachCompany, 'name' | 'website' | 'city' | 'siteText'>,
+  job?: { title: string; url: string } | null
+) {
   const { aiProvider, aiKey } = await getUserKeys(user.id)
   if (!aiKey) throw new OutreachKeyError('ai', `Add your ${PROVIDER_LABEL[aiProvider]} API key in Settings to write email drafts.`)
 
@@ -414,7 +418,11 @@ export async function draftEmail(user: CurrentUser, company: Pick<OutreachCompan
 
   const companyBlock = `Company: ${company.name}\nWebsite: ${company.website}${company.city ? `\nCity: ${company.city}` : ''}\n<website_text>\n${company.siteText || '(not available)'}\n</website_text>`
 
-  const prompt = `Developer profile:\n${profile}\n\n${companyBlock}\n\nWrite the email.`
+  // Optional open position from the company's careers page (also untrusted page text).
+  const jobBlock = job
+    ? `\n\n<open_position>\nTitle: ${job.title.slice(0, 120)}\nPosting: ${job.url}\n</open_position>\nThis is an application for the open position above: name the position in the subject and the first line, and explain why the developer fits it.`
+    : ''
+  const prompt = `Developer profile:\n${profile}\n\n${companyBlock}${jobBlock}\n\nWrite the email.`
   const text = aiProvider === 'gemini'
     ? await writeWithGemini(aiKey, SYSTEM_PROMPT, prompt)
     : await writeWithAnthropic(aiKey, SYSTEM_PROMPT, prompt)

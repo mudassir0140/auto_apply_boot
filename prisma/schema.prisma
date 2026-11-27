@@ -57,6 +57,49 @@ model User {
   notifications       Notification[]
   outreachCompanies   OutreachCompany[]
   apiKeys             UserApiKeys?
+  autoOutreachState   AutoOutreachState?
+  autoOutreachLogs    AutoOutreachLog[]
+}
+
+// "Auto Apply" switch on /dashboard. The loop only runs while the dashboard is open:
+// the page calls /api/auto-apply/tick, and the server decides what (if anything) is due.
+model AutoOutreachState {
+  id           String    @id @default(auto()) @map("_id") @db.ObjectId
+  userId       String    @unique @db.ObjectId
+  enabled      Boolean   @default(false)
+  nextSendAt   DateTime? // 2-5 minutes after the previous email
+  lockedUntil  DateTime? // one tick at a time per user (several tabs cannot double-send)
+  lastTickAt   DateTime?
+  queryIndex   Int       @default(0) // which Places search phrase to try next
+  message      String?   // last status / reason the loop stopped
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// One row per thing Auto Apply did: a cold email, a job application email, or a job
+// that needs a manual application (form only; forms are never filled automatically).
+model AutoOutreachLog {
+  id             String    @id @default(auto()) @map("_id") @db.ObjectId
+  userId         String    @db.ObjectId
+  companyId      String?   @db.ObjectId // OutreachCompany
+  company        String
+  website        String?
+  email          String?   // lower-cased recipient
+  jobTitle       String?
+  jobUrl         String?
+  type           String    // email | job_applied | apply_manually
+  status         String    // sent | failed | pending
+  error          String?
+  gmailMessageId String?
+  sentAt         DateTime?
+  createdAt      DateTime  @default(now())
+
+  user           User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([userId, email])
 }
 
 // The user's own API keys for outreach, AES-256-GCM encrypted with ENCRYPTION_KEY
@@ -100,6 +143,7 @@ model OutreachCompany {
   sentAt        DateTime?
   gmailMessageId String?
   error         String?
+  autoCheckedAt DateTime? // Auto Apply has already handled this company
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
