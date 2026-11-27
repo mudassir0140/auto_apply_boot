@@ -9,13 +9,16 @@ const globalForPrisma = global as unknown as {
 // The schema is MongoDB. A leftover SQLite value ("file:./dev.db") makes every
 // PrismaAdapter call fail inside /api/auth/callback/google, which NextAuth reports
 // only as the opaque "?error=Callback". Say what is actually wrong, in the terminal.
-const databaseUrl = process.env.DATABASE_URL || ''
+const databaseUrl = (process.env.DATABASE_URL || '').trim().replace(/^["']+|["']+$/g, '').trim()
 const isMongoUrl = databaseUrl.startsWith('mongodb://') || databaseUrl.startsWith('mongodb+srv://')
 if (process.env.NEXT_PHASE !== 'phase-production-build' && !isMongoUrl) {
   console.error(
     [
       '',
       `[boot] DATABASE_URL is not a MongoDB connection string (protocol "${databaseUrl.split(':')[0]}").`,
+      /^postgres(ql)?:/i.test(databaseUrl)
+        ? '[boot] It is a PostgreSQL (e.g. Neon) URL, but prisma/schema.prisma uses provider "mongodb": no user can be saved.'
+        : '',
       '[boot] Google sign-in will fail with ?error=Callback until DATABASE_URL in .env.local is your',
       '[boot] MongoDB Atlas URL (mongodb+srv://.../boot?retryWrites=true&w=majority). See MONGODB_SETUP.md.',
       '',

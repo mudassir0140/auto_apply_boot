@@ -50,6 +50,7 @@ export default function DashboardLayout({
     { href: '/dashboard/jobs', icon: '💼', label: 'Jobs' },
     { href: '/dashboard/applications', icon: '📋', label: 'Applications' },
     { href: '/dashboard/emails', icon: '📧', label: 'Emails' },
+    { href: '/dashboard/outreach', icon: '\u{1F3E2}', label: 'Outreach' },
     { href: '/dashboard/analytics', icon: '📈', label: 'Analytics' },
     { href: '/dashboard/settings', icon: '⚙️', label: 'Settings' },
   ]
